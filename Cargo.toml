@@ -1,0 +1,22 @@
+[package]
+name = "geo-doc-examples"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+egui = "0.31"
+eframe = { version = "0.31", default-features = false }
+galileo = { git = "https://github.com/Maximkaaa/galileo.git" }
+galileo-types = { git = "https://github.com/Maximkaaa/galileo.git" }
+galileo-egui = { git = "https://github.com/Maximkaaa/galileo.git", features = [
+    "init",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+wasm-bindgen = "0.2"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+uuid = { version = "1", features = ["js"] }
