@@ -94,8 +94,34 @@
 </style>
 
 <body id="map">
-    <canvas id="the_canvas_id"></canvas>
+    <div style="height: 100%; width: 100%; position: absolute; top: 0; left: 0;">
+        <canvas id="the_canvas_id"></canvas>
+    </div>
+
     <script src="./pkg/geo_doc_examples.js"></script>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            // Get the canvas element
+            const canvas = document.getElementById("the_canvas_id");
+
+            // document.onwheel = function (event) {
+            //     event.preventDefault();
+            // };
+
+            // document.onmousewheel = function (event) {
+            //     event.preventDefault();
+            // };
+
+            // canvas.onwheel = function (event) {
+            //     event.preventDefault();
+            // };
+
+            // canvas.onmousewheel = function (event) {
+            //     event.preventDefault();
+            // };
+        });
+    </script>
 
     <script>
         const { main } = wasm_bindgen;
