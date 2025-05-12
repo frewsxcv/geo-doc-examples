@@ -63,10 +63,19 @@ pub fn main() {
 }
 
 pub fn run() {
-    galileo_egui::InitBuilder::new(create_map())
-        .with_app_builder(|egui_map_state| Box::new(EguiMapApp::new(egui_map_state)))
-        .init()
-        .expect("failed to initialize");
+    let mut builder = galileo_egui::InitBuilder::new(create_map())
+        .with_app_builder(|egui_map_state| Box::new(EguiMapApp::new(egui_map_state)));
+
+    #[cfg(target_family = "wasm")]
+    {
+        builder = builder.with_web_options(eframe::WebOptions {
+            should_stop_propagation: Box::new(|_| false),
+            should_prevent_default: Box::new(|_| false),
+            ..Default::default()
+        });
+    }
+
+    builder.init().expect("failed to initialize");
 }
 
 fn create_map() -> Map {

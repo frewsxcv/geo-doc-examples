@@ -9,16 +9,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 egui = "0.31"
 eframe = { version = "0.31", default-features = false }
-galileo = { path = "/Users/coreyf/dev/Maximkaaa/galileo/galileo" }
-galileo-types = { path = "/Users/coreyf/dev/Maximkaaa/galileo/galileo-types" }
-galileo-egui = { path = "/Users/coreyf/dev/Maximkaaa/galileo/galileo-egui", features = [
+galileo = { git = "https://github.com/frewsxcv/galileo.git", branch = "frewsxcv-34E3D33E-604F-49AA-99D2-7561A0D1ABA9" }
+galileo-types = { git = "https://github.com/frewsxcv/galileo.git", branch = "frewsxcv-34E3D33E-604F-49AA-99D2-7561A0D1ABA9" }
+galileo-egui = { git = "https://github.com/frewsxcv/galileo.git", branch = "frewsxcv-34E3D33E-604F-49AA-99D2-7561A0D1ABA9", features = [
     "init",
 ] }
-# galileo = { git = "https://github.com/Maximkaaa/galileo.git" }
-# galileo-types = { git = "https://github.com/Maximkaaa/galileo.git" }
-# galileo-egui = { git = "https://github.com/Maximkaaa/galileo.git", features = [
-#     "init",
-# ] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
