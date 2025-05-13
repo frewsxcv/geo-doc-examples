@@ -1,15 +1,9 @@
 {
   "name": "geo-doc-examples",
-  "type": "module",
   "version": "0.1.0",
   "files": [
     "geo_doc_examples_bg.wasm",
-    "geo_doc_examples.js",
-    "geo_doc_examples_bg.js"
+    "geo_doc_examples.js"
   ],
-  "main": "geo_doc_examples.js",
-  "sideEffects": [
-    "./geo_doc_examples.js",
-    "./snippets/*"
-  ]
+  "browser": "geo_doc_examples.js"
 }
