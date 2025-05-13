@@ -26,6 +26,8 @@ jobs:
         run: wasm-pack build --no-typescript --release
         env:
           RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
+      - name: Remove pkg gitignore
+        run: rm pkg/.gitignore
       - name: Deploy to GitHub Pages
         if: github.ref == 'refs/heads/main'
         uses: JamesIves/github-pages-deploy-action@v4.2.5
