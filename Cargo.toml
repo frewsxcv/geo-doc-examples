@@ -10,10 +10,13 @@ crate-type = ["cdylib", "rlib"]
 egui = "0.31"
 eframe = { version = "0.31", default-features = false }
 galileo = { git = "https://github.com/frewsxcv/galileo.git", branch = "frewsxcv-34E3D33E-604F-49AA-99D2-7561A0D1ABA9" }
-galileo-types = { git = "https://github.com/frewsxcv/galileo.git", branch = "frewsxcv-34E3D33E-604F-49AA-99D2-7561A0D1ABA9" }
+galileo-types = { git = "https://github.com/frewsxcv/galileo.git", branch = "frewsxcv-34E3D33E-604F-49AA-99D2-7561A0D1ABA9", features = [
+    "geo-types",
+] }
 galileo-egui = { git = "https://github.com/frewsxcv/galileo.git", branch = "frewsxcv-34E3D33E-604F-49AA-99D2-7561A0D1ABA9", features = [
     "init",
 ] }
+geo = "*"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
