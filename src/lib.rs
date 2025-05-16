@@ -1,8 +1,10 @@
 //! Example showing how to integrate Galileo map into your egui application.
 
+use std::sync::{Arc, RwLock};
+
 use galileo::control::{EventPropagation, UserEvent, UserEventHandler};
 use galileo::layer::raster_tile_layer::RasterTileLayerBuilder;
-use galileo::layer::{FeatureLayer, Layer, feature_layer};
+use galileo::layer::{FeatureId, FeatureLayer, Layer, feature_layer};
 use galileo::symbol::{CirclePointSymbol, SimpleContourSymbol};
 use galileo::{Color, Map, MapBuilder};
 use galileo_egui::{EguiMap, EguiMapState};
@@ -69,6 +71,9 @@ pub fn main() {
 }
 
 pub fn run() {
+    // TODO can't featureid be sync?
+    let feature_id = Arc::new(RwLock::new(FeatureId::next()));
+
     let handler: Box<dyn UserEventHandler> =
         Box::new(move |ev: &UserEvent, map: &mut Map| match ev {
             UserEvent::DragStarted(mouse_button, event) => {
@@ -82,11 +87,12 @@ pub fn run() {
 
                 for layer in map.layers().iter() {
                     if let Some(feature_layer) = layer_as_point_feature_layer(layer) {
-                        if feature_layer
+                        if let Some((found_feature_id, _point)) = feature_layer
                             .get_features_at(&position, resolution * 7.0)
                             .next()
-                            .is_some()
                         {
+                            let mut feature_id_writer = (*feature_id).write().unwrap();
+                            *feature_id_writer = found_feature_id;
                             return EventPropagation::Consume;
                         }
                     }
@@ -94,7 +100,11 @@ pub fn run() {
                 EventPropagation::Propagate
             }
             UserEvent::Drag(mouse_button, second, third) => {
-                println!("Drag: {:?} {:?} {:?}", mouse_button, second, third);
+                let feature_id_reader = feature_id.read().unwrap();
+                println!(
+                    "Dragging: {:?} {:?} {:?} {:?}",
+                    mouse_button, second, third, *feature_id_reader
+                );
                 EventPropagation::Stop
             }
             _ => EventPropagation::Propagate,
