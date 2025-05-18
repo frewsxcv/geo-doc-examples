@@ -72,44 +72,22 @@ pub fn main() {
 
 pub fn run() {
     // TODO can't featureid be sync?
-    let feature_id = Arc::new(RwLock::new(FeatureId::next()));
+    let feature_id = Arc::new(RwLock::new(None::<FeatureId>));
 
     let handler: Box<dyn UserEventHandler> =
         Box::new(move |ev: &UserEvent, map: &mut Map| match ev {
             UserEvent::DragStarted(mouse_button, event) => {
-                println!("DragStarted: {:?} {:?}", mouse_button, event);
-
-                let Some(position) = map.view().screen_to_map(event.screen_pointer_position) else {
-                    return EventPropagation::Stop;
-                };
-
-                let resolution = map.view().resolution();
-
-                for layer in map.layers().iter() {
-                    if let Some(feature_layer) = layer_as_point_feature_layer(layer) {
-                        if let Some((found_feature_id, _point)) = feature_layer
-                            .get_features_at(&position, resolution * 7.0)
-                            .next()
-                        {
-                            let mut feature_id_writer = (*feature_id).write().unwrap();
-                            *feature_id_writer = found_feature_id;
-                            return EventPropagation::Consume;
-                        }
-                    }
-                }
-                EventPropagation::Propagate
+                handle_drag_started(mouse_button, event, map, &feature_id)
             }
-            UserEvent::Drag(mouse_button, second, third) => {
-                let feature_id_reader = feature_id.read().unwrap();
-                println!(
-                    "Dragging: {:?} {:?} {:?} {:?}",
-                    mouse_button, second, third, *feature_id_reader
-                );
-                EventPropagation::Stop
+            UserEvent::Drag(mouse_button, delta, event) => {
+                handle_drag(mouse_button, delta, event, &feature_id, map)
             }
             _ => EventPropagation::Propagate,
         });
-    let mut builder = galileo_egui::InitBuilder::new(create_map())
+
+    let map = create_map();
+
+    let mut builder = galileo_egui::InitBuilder::new(map)
         .with_app_builder(|egui_map_state| Box::new(EguiMapApp::new(egui_map_state)))
         .with_handlers(vec![handler]);
 
@@ -123,6 +101,81 @@ pub fn run() {
     }
 
     builder.init().expect("failed to initialize");
+}
+
+fn handle_drag(
+    _mouse_button: &galileo::control::MouseButton,
+    _delta: &galileo_types::cartesian::Vector2<f64>,
+    event: &galileo::control::MouseEvent,
+    feature_id_arc: &Arc<RwLock<Option<FeatureId>>>,
+    map: &mut Map,
+) -> EventPropagation {
+    let opt_feature_id_to_drag = *feature_id_arc.read().unwrap();
+    if let Some(feature_id_to_drag) = opt_feature_id_to_drag {
+        let Some(new_feature_position) = map.view().screen_to_map(event.screen_pointer_position)
+        else {
+            eprintln!("Failed to convert screen position to map coordinates");
+            return EventPropagation::Stop;
+        };
+
+        let mut needs_redraw = false;
+        for layer_trait_object in map.layers_mut().iter_mut() {
+            if let Some(feature_layer) = layer_trait_object
+                .as_any_mut()
+                .downcast_mut::<FeatureLayer<Point2, Point2, CirclePointSymbol, CartesianSpace2d>>()
+            {
+                if let Some(point_to_update) =
+                    feature_layer.features_mut().get_mut(feature_id_to_drag)
+                {
+                    *point_to_update = new_feature_position;
+                    feature_layer.update_feature(feature_id_to_drag);
+                    needs_redraw = true;
+                    break;
+                }
+            }
+        }
+
+        if needs_redraw {
+            map.redraw();
+            return EventPropagation::Consume;
+        }
+
+        return EventPropagation::Stop;
+    } else {
+        EventPropagation::Propagate
+    }
+}
+
+fn handle_drag_started(
+    mouse_button: &galileo::control::MouseButton,
+    event: &galileo::control::MouseEvent,
+    map: &mut galileo::Map,
+    feature_id_arc: &Arc<RwLock<Option<FeatureId>>>,
+) -> EventPropagation {
+    println!("DragStarted: {:?} {:?}", mouse_button, event);
+
+    let Some(position) = map.view().screen_to_map(event.screen_pointer_position) else {
+        eprintln!(
+            "Failed to convert screen position to map Cartesian coordinates for drag_started"
+        );
+        return EventPropagation::Stop;
+    };
+
+    let resolution = map.view().resolution();
+
+    for layer_trait_object in map.layers().iter() {
+        if let Some(feature_layer) = layer_as_point_feature_layer(layer_trait_object) {
+            if let Some((found_feature_id, _point_properties)) = feature_layer
+                .get_features_at(&position, resolution * 7.0)
+                .next()
+            {
+                let mut feature_id_writer = (*feature_id_arc).write().unwrap();
+                *feature_id_writer = Some(found_feature_id);
+                return EventPropagation::Consume;
+            }
+        }
+    }
+    EventPropagation::Propagate
 }
 
 fn layer_as_point_feature_layer(
@@ -143,14 +196,16 @@ fn create_map() -> Map {
         .get_projection()
         .expect("must find projection");
 
-    let vector_layer: FeatureLayer<_, _, _, CartesianSpace2d> = FeatureLayer::new(
-        vec![
-            geo::point!(x: 127.9784, y: 37.566).to_geo2d(),
-            geo::point!(x: 128.9784, y: 37.566).to_geo2d(),
-        ]
-        .into_iter()
-        .map(|p| projection.project(&p).unwrap())
-        .collect::<Vec<Point2>>(),
+    let points_geometries: Vec<Point2> = vec![
+        geo::point!(x: 127.9784, y: 37.566).to_geo2d(),
+        geo::point!(x: 128.9784, y: 37.566).to_geo2d(),
+    ]
+    .into_iter()
+    .map(|p_geo| projection.project(&p_geo).expect("Point projection failed"))
+    .collect();
+
+    let vector_layer: FeatureLayer<Point2, Point2, _, CartesianSpace2d> = FeatureLayer::new(
+        points_geometries,
         CirclePointSymbol {
             color: Color::GREEN,
             size: 10.0,
