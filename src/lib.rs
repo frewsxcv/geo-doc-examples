@@ -1,18 +1,25 @@
 //! Example showing how to integrate Galileo map into your egui application.
 
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use galileo::control::{EventPropagation, UserEvent, UserEventHandler};
 use galileo::layer::raster_tile_layer::RasterTileLayerBuilder;
-use galileo::layer::{FeatureId, FeatureLayer, Layer, feature_layer};
+use galileo::layer::{
+    FeatureId, FeatureLayer, Layer,
+    feature_layer::{self, Feature},
+};
 use galileo::symbol::{CirclePointSymbol, SimpleContourSymbol};
 use galileo::{Color, Map, MapBuilder};
 use galileo_egui::{EguiMap, EguiMapState};
 use galileo_types::cartesian::Point2;
+use galileo_types::contour::Contour as ContourTrait;
 use galileo_types::geo::impls::GeoPoint2d;
-use galileo_types::geo::{Crs, GeoPoint};
+use galileo_types::geo::{Crs, GeoPoint, NewGeoPoint};
 use galileo_types::geometry_type::{CartesianSpace2d, GeoSpace2d};
+use galileo_types::impls::Contour;
 use galileo_types::{Disambig, Disambiguate};
+use geo::{HaversineDistance, LineString};
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
@@ -71,23 +78,91 @@ pub fn main() {
 }
 
 pub fn run() {
-    // TODO can't featureid be sync?
-    let feature_id = Arc::new(RwLock::new(None::<FeatureId>));
+    let projection_for_initial_points = Crs::EPSG3857
+        .get_projection::<GeoPoint2d, Point2>()
+        .expect("must find projection for initial points");
 
-    let handler: Box<dyn UserEventHandler> =
-        Box::new(move |ev: &UserEvent, map: &mut Map| match ev {
+    let initial_points_data: Vec<Point2> = vec![
+        geo::point!(x: 127.9784, y: 37.566).to_geo2d(),
+        geo::point!(x: 128.9784, y: 37.566).to_geo2d(),
+    ]
+    .into_iter()
+    .map(|p_geo| {
+        let galileo_geo_point = GeoPoint2d::lonlat(p_geo.lon(), p_geo.lat());
+        projection_for_initial_points
+            .project(&galileo_geo_point)
+            .expect("Initial point projection failed")
+    })
+    .collect();
+
+    let shared_points_data = Arc::new(RwLock::new(initial_points_data.clone()));
+    let feature_id_to_index_map = Arc::new(RwLock::new(HashMap::<FeatureId, usize>::new()));
+    let line_feature_id_arc = Arc::new(RwLock::new(None::<FeatureId>));
+
+    let map_instance = create_map(initial_points_data, line_feature_id_arc.clone());
+
+    // Populate the feature_id_to_index_map
+    {
+        let mut map_writer = feature_id_to_index_map.write().unwrap();
+        let mut layer_found_and_mapped = false;
+        // Iterate over layers to find the one we want to map IDs from.
+        // This assumes it's the first FeatureLayer of its specific type, or you might need a more robust way to identify it (e.g., layer ID).
+        for layer_trait_object in map_instance.layers().iter() {
+            if let Some(feature_layer) = layer_trait_object.as_any().downcast_ref::<FeatureLayer<
+                Point2,
+                Point2,
+                CirclePointSymbol,
+                CartesianSpace2d,
+            >>() {
+                println!("Found target FeatureLayer for ID mapping.");
+                for (original_index, (feature_id, _point_feature)) in
+                    feature_layer.features().iter().enumerate()
+                {
+                    map_writer.insert(feature_id, original_index);
+                    println!(
+                        "Mapping actual FeatureId {:?} to original_index {}",
+                        feature_id, original_index
+                    );
+                }
+                layer_found_and_mapped = true;
+                break; // Found and mapped our layer
+            }
+        }
+        if !layer_found_and_mapped {
+            eprintln!(
+                "WARNING: Could not find the target FeatureLayer to build the FeatureId-to-index map."
+            );
+        }
+    }
+
+    let selected_feature_id_handler = Arc::new(RwLock::new(None::<FeatureId>));
+
+    let handler_shared_points = shared_points_data.clone();
+    let handler_id_map = feature_id_to_index_map.clone();
+    let handler_line_id = line_feature_id_arc.clone(); // For handle_drag
+
+    let handler: Box<dyn UserEventHandler> = Box::new(move |ev: &UserEvent, map: &mut Map| {
+        let captured_shared_points = handler_shared_points.clone();
+        let captured_id_map = handler_id_map.clone();
+        let captured_line_id = handler_line_id.clone(); // Clone for this specific call
+        match ev {
             UserEvent::DragStarted(mouse_button, event) => {
-                handle_drag_started(mouse_button, event, map, &feature_id)
+                handle_drag_started(mouse_button, event, map, &selected_feature_id_handler)
             }
-            UserEvent::Drag(mouse_button, delta, event) => {
-                handle_drag(mouse_button, delta, event, &feature_id, map)
-            }
+            UserEvent::Drag(mouse_button, delta, event) => handle_drag(
+                mouse_button,
+                delta,
+                event,
+                &selected_feature_id_handler,
+                map,
+                &captured_shared_points,
+                &captured_id_map,
+                &captured_line_id, // Pass to handle_drag
+            ),
             _ => EventPropagation::Propagate,
-        });
-
-    let map = create_map();
-
-    let mut builder = galileo_egui::InitBuilder::new(map)
+        }
+    });
+    let mut builder = galileo_egui::InitBuilder::new(map_instance)
         .with_app_builder(|egui_map_state| Box::new(EguiMapApp::new(egui_map_state)))
         .with_handlers(vec![handler]);
 
@@ -109,6 +184,9 @@ fn handle_drag(
     event: &galileo::control::MouseEvent,
     feature_id_arc: &Arc<RwLock<Option<FeatureId>>>,
     map: &mut Map,
+    shared_points: &Arc<RwLock<Vec<Point2>>>,
+    id_to_index_map: &Arc<RwLock<HashMap<FeatureId, usize>>>,
+    line_id_arc: &Arc<RwLock<Option<FeatureId>>>,
 ) -> EventPropagation {
     let opt_feature_id_to_drag = *feature_id_arc.read().unwrap();
     if let Some(feature_id_to_drag) = opt_feature_id_to_drag {
@@ -119,27 +197,137 @@ fn handle_drag(
         };
 
         let mut needs_redraw = false;
+        let mut point_updated_in_layer = false;
+
         for layer_trait_object in map.layers_mut().iter_mut() {
             if let Some(feature_layer) = layer_trait_object
                 .as_any_mut()
                 .downcast_mut::<FeatureLayer<Point2, Point2, CirclePointSymbol, CartesianSpace2d>>()
             {
-                if let Some(point_to_update) =
-                    feature_layer.features_mut().get_mut(feature_id_to_drag)
+                if feature_layer
+                    .features_mut()
+                    .get_mut(feature_id_to_drag)
+                    .is_some()
                 {
+                    let point_to_update = feature_layer
+                        .features_mut()
+                        .get_mut(feature_id_to_drag)
+                        .unwrap();
                     *point_to_update = new_feature_position;
                     feature_layer.update_feature(feature_id_to_drag);
+                    point_updated_in_layer = true;
+
+                    let id_map_reader = id_to_index_map.read().unwrap();
+                    if let Some(index) = id_map_reader.get(&feature_id_to_drag) {
+                        let mut shared_points_writer = shared_points.write().unwrap();
+                        if *index < shared_points_writer.len() {
+                            shared_points_writer[*index] = new_feature_position;
+                            println!(
+                                "Updated shared_points[{}] (mapped from FeatureId {:?}) to: {:?}",
+                                index, feature_id_to_drag, new_feature_position
+                            );
+                        } else {
+                            eprintln!(
+                                "Error: Mapped index {} out of bounds for shared_points (len {})",
+                                index,
+                                shared_points_writer.len()
+                            );
+                        }
+                    } else {
+                        eprintln!(
+                            "Error: FeatureId {:?} not found in id_to_index_map.",
+                            feature_id_to_drag
+                        );
+                    }
+
                     needs_redraw = true;
-                    break;
                 }
             }
         }
 
         if needs_redraw {
+            // Update the line layer (vector_layer2) based on the new positions of draggable points
+            let opt_line_id_to_update = *line_id_arc.read().unwrap();
+            if let Some(line_id_to_update) = opt_line_id_to_update {
+                let current_cartesian_points = shared_points.read().unwrap();
+                if current_cartesian_points.len() >= 2 {
+                    let p1_cartesian = current_cartesian_points[0];
+                    let p2_cartesian = current_cartesian_points[1];
+
+                    // Get the projector for unprojection
+                    // Note: This assumes Crs::EPSG3857 is the CRS of the cartesian points
+                    if let Some(projector) = Crs::EPSG3857.get_projection::<GeoPoint2d, Point2>() {
+                        if let (Some(p1_geo_proj), Some(p2_geo_proj)) = (
+                            projector.unproject(&p1_cartesian),
+                            projector.unproject(&p2_cartesian),
+                        ) {
+                            let p1_geo_coord =
+                                geo::coord!(x: p1_geo_proj.lon(), y: p1_geo_proj.lat());
+                            let p2_geo_coord =
+                                geo::coord!(x: p2_geo_proj.lon(), y: p2_geo_proj.lat());
+
+                            let new_line_contour_data =
+                                Contour::new(vec![p1_geo_coord, p2_geo_coord], false);
+
+                            let mut line_layer_updated = false;
+                            for layer_trait_object_mut in map.layers_mut().iter_mut() {
+                                if let Some(line_feature_layer) = layer_trait_object_mut
+                                    .as_any_mut()
+                                    .downcast_mut::<FeatureLayer<
+                                        geo::Coord<f64>,
+                                        Contour<geo::Coord<f64>>,
+                                        SimpleContourSymbol,
+                                        GeoSpace2d,
+                                    >>()
+                                {
+                                    if let Some(line_to_update) =
+                                        line_feature_layer.features_mut().get_mut(line_id_to_update)
+                                    {
+                                        *line_to_update = new_line_contour_data.clone();
+                                        line_feature_layer.update_feature(line_id_to_update);
+                                        println!(
+                                            "Updated line feature {:?} in vector_layer2",
+                                            line_id_to_update
+                                        );
+                                        line_layer_updated = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if !line_layer_updated {
+                                eprintln!(
+                                    "Failed to find and update line feature {:?} in vector_layer2",
+                                    line_id_to_update
+                                );
+                            }
+                        } else {
+                            eprintln!("Failed to unproject one or both points for the line.");
+                        }
+                    } else {
+                        eprintln!("Failed to get projector for EPSG:3857.");
+                    }
+                } else {
+                    eprintln!(
+                        "shared_points_data does not contain enough points to form a line for vector_layer2."
+                    );
+                }
+            } else {
+                eprintln!("Line feature ID not available in line_id_arc to update vector_layer2.");
+            }
+
+            // Calculate and print Haversine distance of the (potentially updated) line
+            if let Some(contour_geom) = get_first_line_contour_geometry(map) {
+                print_contour_haversine_distance(contour_geom);
+            }
+
             map.redraw();
             return EventPropagation::Consume;
         }
 
+        if !point_updated_in_layer {
+            return EventPropagation::Stop;
+        }
         return EventPropagation::Stop;
     } else {
         EventPropagation::Propagate
@@ -186,26 +374,17 @@ fn layer_as_point_feature_layer(
         .downcast_ref::<FeatureLayer<Point2, Point2, CirclePointSymbol, CartesianSpace2d>>()
 }
 
-fn create_map() -> Map {
+fn create_map(
+    initial_points: Vec<Point2>,
+    line_feature_id_arc: Arc<RwLock<Option<FeatureId>>>,
+) -> Map {
     let layer = RasterTileLayerBuilder::new_osm()
         .with_file_cache_checked(".tile_cache")
         .build()
         .expect("failed to create layer");
 
-    let projection = Crs::EPSG3857
-        .get_projection()
-        .expect("must find projection");
-
-    let points_geometries: Vec<Point2> = vec![
-        geo::point!(x: 127.9784, y: 37.566).to_geo2d(),
-        geo::point!(x: 128.9784, y: 37.566).to_geo2d(),
-    ]
-    .into_iter()
-    .map(|p_geo| projection.project(&p_geo).expect("Point projection failed"))
-    .collect();
-
     let vector_layer: FeatureLayer<Point2, Point2, _, CartesianSpace2d> = FeatureLayer::new(
-        points_geometries,
+        initial_points,
         CirclePointSymbol {
             color: Color::GREEN,
             size: 10.0,
@@ -213,20 +392,33 @@ fn create_map() -> Map {
         Crs::EPSG3857,
     );
 
-    let vector_layer2: FeatureLayer<_, _, _, GeoSpace2d> = FeatureLayer::new(
+    let line_data = vec![Contour::new(
         vec![
-            geo::line_string![
-                geo::coord!(x: 127.9784, y: 37.566),
-                geo::coord!(x: 128.9784, y: 37.566),
-            ]
-            .to_geo2d(),
+            geo::coord!(x: 127.9784, y: 37.566),
+            geo::coord!(x: 128.9784, y: 37.566),
         ],
-        SimpleContourSymbol {
-            color: Color::BLUE,
-            width: 3.0,
-        },
-        Crs::WGS84,
-    );
+        false,
+    )];
+
+    let vector_layer2: FeatureLayer<geo::Coord<f64>, Contour<geo::Coord<f64>>, _, GeoSpace2d> =
+        FeatureLayer::new(
+            line_data,
+            SimpleContourSymbol {
+                color: Color::BLUE,
+                width: 3.0,
+            },
+            Crs::WGS84,
+        );
+
+    {
+        let mut line_id_writer = line_feature_id_arc.write().unwrap();
+        if let Some((id, _)) = vector_layer2.features().iter().next() {
+            *line_id_writer = Some(id);
+            println!("Stored line FeatureId for vector_layer2: {:?}", id);
+        } else {
+            eprintln!("ERROR: vector_layer2 has no features to get ID from.");
+        }
+    }
 
     MapBuilder::default()
         .with_latlon(37.566, 128.9784)
@@ -235,4 +427,42 @@ fn create_map() -> Map {
         .with_layer(vector_layer2)
         .with_layer(vector_layer)
         .build()
+}
+
+fn get_first_line_contour_geometry(
+    map: &Map,
+) -> Option<&galileo_types::impls::Contour<geo::Coord<f64>>> {
+    for layer_ref in map.layers().iter() {
+        if let Some(line_layer) = layer_ref.as_any().downcast_ref::<FeatureLayer<
+            geo::Coord<f64>,
+            Contour<geo::Coord<f64>>,
+            SimpleContourSymbol,
+            GeoSpace2d,
+        >>() {
+            if let Some((_id, contour_feature)) = line_layer.features().iter().next() {
+                return Some(contour_feature.geometry());
+            }
+            // If layer is found but has no features, we can stop.
+            return None;
+        }
+    }
+    None
+}
+
+fn print_contour_haversine_distance(
+    contour_geometry: &galileo_types::impls::Contour<geo::Coord<f64>>,
+) {
+    let points_vec: Vec<geo::Coord<f64>> = contour_geometry.iter_points().cloned().collect();
+
+    if points_vec.len() >= 2 {
+        let p1 = points_vec[0];
+        let p2 = points_vec[1];
+        let distance = geo::Point(p1).haversine_distance(&geo::Point(p2));
+        println!(
+            "Haversine distance of the static line: {:.2} meters",
+            distance
+        );
+    } else {
+        println!("Line contour does not have enough points to calculate distance.");
+    }
 }
