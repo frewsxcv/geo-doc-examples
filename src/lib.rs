@@ -8,7 +8,7 @@ use galileo::layer::raster_tile_layer::RasterTileLayerBuilder;
 use galileo::layer::{FeatureId, FeatureLayer, Layer, feature_layer::Feature};
 use galileo::symbol::{CirclePointSymbol, SimpleContourSymbol};
 use galileo::{Color, Map, MapBuilder};
-use galileo_egui::{EguiMap, EguiMapState};
+use galileo_egui::InitBuilder; // EguiMapState and EguiMap are used in app_ui.rs
 use galileo_types::Disambiguate;
 use galileo_types::cartesian::Point2;
 use galileo_types::contour::Contour as ContourTrait;
@@ -17,63 +17,12 @@ use galileo_types::geo::{Crs, GeoPoint, NewGeoPoint};
 use galileo_types::geometry_type::{CartesianSpace2d, GeoSpace2d};
 use galileo_types::impls::Contour;
 use geo::Distance;
+
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
-struct EguiMapApp {
-    map: EguiMapState,
-    position: GeoPoint2d,
-    resolution: f64,
-    shared_haversine_distance: Arc<RwLock<Option<f64>>>,
-}
-
-impl EguiMapApp {
-    fn new(map_state: EguiMapState, shared_haversine_distance: Arc<RwLock<Option<f64>>>) -> Self {
-        let position = map_state
-            .map()
-            .view()
-            .position()
-            .expect("invalid map position");
-        let resolution = map_state.map().view().resolution();
-
-        Self {
-            map: map_state,
-            position,
-            resolution,
-            shared_haversine_distance,
-        }
-    }
-}
-
-impl eframe::App for EguiMapApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            EguiMap::new(&mut self.map)
-                .with_position(&mut self.position)
-                .with_resolution(&mut self.resolution)
-                .show_ui(ui);
-
-            egui::Window::new("Galileo map").show(ctx, |ui| {
-                ui.label("Map center position:");
-                ui.label(format!(
-                    "Lat: {:.4} Lon: {:.4}",
-                    self.position.lat(),
-                    self.position.lon()
-                ));
-
-                ui.separator();
-                ui.label("Map resolution:");
-                ui.label(format!("{:6}", self.resolution));
-
-                if let Some(distance) = *self.shared_haversine_distance.read().unwrap() {
-                    ui.separator();
-                    ui.label("Line Haversine Distance:");
-                    ui.label(format!("{:.2} meters", distance));
-                }
-            });
-        });
-    }
-}
+pub mod app_ui; // Declare the new module
+use app_ui::EguiMapApp; // Import the struct
 
 #[cfg(target_family = "wasm")]
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
