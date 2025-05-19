@@ -16,7 +16,7 @@ use galileo_types::geo::impls::GeoPoint2d;
 use galileo_types::geo::{Crs, GeoPoint, NewGeoPoint};
 use galileo_types::geometry_type::{CartesianSpace2d, GeoSpace2d};
 use galileo_types::impls::Contour;
-use geo::Distance;
+use geo::{Distance, Haversine, HaversineDistance, LineString};
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
@@ -24,10 +24,11 @@ struct EguiMapApp {
     map: EguiMapState,
     position: GeoPoint2d,
     resolution: f64,
+    shared_haversine_distance: Arc<RwLock<Option<f64>>>,
 }
 
 impl EguiMapApp {
-    fn new(map_state: EguiMapState) -> Self {
+    fn new(map_state: EguiMapState, shared_haversine_distance: Arc<RwLock<Option<f64>>>) -> Self {
         let position = map_state
             .map()
             .view()
@@ -39,6 +40,7 @@ impl EguiMapApp {
             map: map_state,
             position,
             resolution,
+            shared_haversine_distance,
         }
     }
 }
@@ -62,6 +64,12 @@ impl eframe::App for EguiMapApp {
                 ui.separator();
                 ui.label("Map resolution:");
                 ui.label(format!("{:6}", self.resolution));
+
+                if let Some(distance) = *self.shared_haversine_distance.read().unwrap() {
+                    ui.separator();
+                    ui.label("Line Haversine Distance:");
+                    ui.label(format!("{:.2} meters", distance));
+                }
             });
         });
     }
@@ -106,6 +114,8 @@ pub fn run() {
     // when one of the draggable points (its endpoints) moves.
     let line_feature_id_arc = Arc::new(RwLock::new(None::<FeatureId>));
 
+    let shared_haversine_distance = Arc::new(RwLock::new(None::<f64>));
+
     let map_instance = create_map(initial_points_data, line_feature_id_arc.clone());
 
     // Populate the feature_id_to_index_map
@@ -146,12 +156,14 @@ pub fn run() {
 
     let handler_shared_points = shared_points_data.clone();
     let handler_id_map = feature_id_to_index_map.clone();
-    let handler_line_id = line_feature_id_arc.clone(); // For handle_drag
+    let handler_line_id = line_feature_id_arc.clone();
+    let handler_distance = shared_haversine_distance.clone();
 
     let handler: Box<dyn UserEventHandler> = Box::new(move |ev: &UserEvent, map: &mut Map| {
         let captured_shared_points = handler_shared_points.clone();
         let captured_id_map = handler_id_map.clone();
-        let captured_line_id = handler_line_id.clone(); // Clone for this specific call
+        let captured_line_id = handler_line_id.clone();
+        let captured_distance = handler_distance.clone();
         match ev {
             UserEvent::DragStarted(mouse_button, event) => {
                 handle_drag_started(mouse_button, event, map, &selected_feature_id_handler)
@@ -166,6 +178,7 @@ pub fn run() {
                     &captured_shared_points,
                     &captured_id_map,
                     &captured_line_id,
+                    &captured_distance,
                 ) {
                     Ok(propagation) => propagation,
                     Err(e) => {
@@ -180,7 +193,12 @@ pub fn run() {
     let mut builder = galileo_egui::InitBuilder::new(map_instance);
 
     builder = builder
-        .with_app_builder(|egui_map_state| Box::new(EguiMapApp::new(egui_map_state)))
+        .with_app_builder(move |egui_map_state| {
+            Box::new(EguiMapApp::new(
+                egui_map_state,
+                shared_haversine_distance.clone(),
+            ))
+        })
         .with_handlers(vec![handler]);
 
     #[cfg(target_family = "wasm")]
@@ -220,6 +238,7 @@ fn handle_drag(
     shared_points: &Arc<RwLock<Vec<Point2>>>,
     id_to_index_map: &Arc<RwLock<HashMap<FeatureId, usize>>>,
     line_id_arc: &Arc<RwLock<Option<FeatureId>>>,
+    haversine_distance_arc: &Arc<RwLock<Option<f64>>>,
 ) -> Result<EventPropagation, DragError> {
     let opt_feature_id_to_drag = *feature_id_arc.read().unwrap();
     if let Some(feature_id_to_drag) = opt_feature_id_to_drag {
@@ -328,7 +347,18 @@ fn handle_drag(
             }
 
             if let Some(contour_geom) = get_first_line_contour_geometry(map) {
-                print_contour_haversine_distance(contour_geom);
+                if let Some(distance) = calculate_contour_haversine_distance(contour_geom) {
+                    *haversine_distance_arc.write().unwrap() = Some(distance);
+                    println!(
+                        "Updated Haversine distance in shared state: {:.2} meters",
+                        distance
+                    );
+                } else {
+                    *haversine_distance_arc.write().unwrap() = None;
+                    println!("Could not calculate Haversine distance, clearing shared state.");
+                }
+            } else {
+                *haversine_distance_arc.write().unwrap() = None; // Clear if no contour
             }
 
             map.redraw();
@@ -338,6 +368,22 @@ fn handle_drag(
         }
     } else {
         Ok(EventPropagation::Propagate)
+    }
+}
+
+fn calculate_contour_haversine_distance(
+    contour_geometry: &galileo_types::impls::Contour<geo::Coord<f64>>,
+) -> Option<f64> {
+    let points_vec: Vec<geo::Coord<f64>> = contour_geometry.iter_points().cloned().collect();
+
+    if points_vec.len() >= 2 {
+        let p1 = points_vec[0];
+        let p2 = points_vec[1];
+        let distance = geo::Haversine.distance(geo::Point(p1), geo::Point(p2));
+        Some(distance)
+    } else {
+        println!("Line contour does not have enough points to calculate distance.");
+        None
     }
 }
 
@@ -463,22 +509,4 @@ fn get_first_line_contour_geometry(
         }
     }
     None
-}
-
-fn print_contour_haversine_distance(
-    contour_geometry: &galileo_types::impls::Contour<geo::Coord<f64>>,
-) {
-    let points_vec: Vec<geo::Coord<f64>> = contour_geometry.iter_points().cloned().collect();
-
-    if points_vec.len() >= 2 {
-        let p1 = points_vec[0];
-        let p2 = points_vec[1];
-        let distance = geo::Haversine.distance(geo::Point(p1), geo::Point(p2));
-        println!(
-            "Haversine distance of the static line: {:.2} meters",
-            distance
-        );
-    } else {
-        println!("Line contour does not have enough points to calculate distance.");
-    }
 }
