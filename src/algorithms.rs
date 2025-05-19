@@ -1,8 +1,8 @@
 use egui::Ui;
-use galileo_types::contour::Contour as ContourTrait; // For iter_points
+use galileo_types::contour::Contour as ContourTrait;
 use galileo_types::impls::Contour;
 use geo::{Coord, Distance, Haversine as GeoHaversine, Point as GeoPoint};
-use std::fmt::Display; // Renamed Haversine to GeoHaversine
+use std::fmt::Display;
 
 // Type alias for algorithm output. Box<dyn Display> allows flexibility.
 pub type AlgorithmOutput = Box<dyn Display + Send + Sync>;
@@ -26,7 +26,6 @@ impl Algorithm for HaversineDistance {
         if points_vec.len() >= 2 {
             let p1 = points_vec[0];
             let p2 = points_vec[1];
-            // Use geo::Point for distance calculation
             let distance = GeoHaversine.distance(GeoPoint(p1), GeoPoint(p2));
             Some(Box::new(format!("{:.2} meters", distance)))
         } else {
@@ -36,10 +35,9 @@ impl Algorithm for HaversineDistance {
     }
 
     fn display_ui(&self, ui: &mut Ui, output: &Option<AlgorithmOutput>) {
-        let content = output.as_ref().map_or_else(
-            || "N/A".to_string(),
-            |val| val.to_string(), // val is Box<dyn Display>, so .to_string() works
-        );
+        let content = output
+            .as_ref()
+            .map_or_else(|| "N/A".to_string(), |val| val.to_string());
         ui.label(format!("{}: {}", self.name(), content));
     }
 }

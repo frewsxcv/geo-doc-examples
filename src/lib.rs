@@ -101,7 +101,6 @@ pub fn run(config: AppConfig) {
         .get_projection::<GeoPoint2d, Point2>()
         .expect("must find projection for initial points");
 
-    // Create initial_points_data from AppConfig
     let initial_points_data: Vec<Point2> = config
         .geometries
         .draggable_points

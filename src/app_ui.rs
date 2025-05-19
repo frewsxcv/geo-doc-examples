@@ -43,23 +43,20 @@ impl EguiMapApp {
         }
     }
 
-    // Helper function to get the line geometry (simplified, assumes one line layer)
-    // This might need to be more robust depending on how line geometry is managed.
-    // Based on get_first_line_contour_geometry from lib.rs
+    // Helper to get line geometry. Assumes a single line feature in a specific layer type.
     fn get_line_geometry(&self) -> Option<Contour<Coord<f64>>> {
         let map_ref = self.map.map();
         for layer_trait_object in map_ref.layers().iter() {
             if let Some(feature_layer) = layer_trait_object
                 .as_any()
                 .downcast_ref::<galileo::layer::FeatureLayer<
-                    geo::Coord<f64>,     // Corrected: Geometry type from lib.rs
-                    Contour<Coord<f64>>, // Corrected: Feature/Properties type from lib.rs
+                    geo::Coord<f64>,
+                    Contour<Coord<f64>>,
                     galileo::symbol::SimpleContourSymbol,
                     galileo_types::geometry_type::GeoSpace2d,
                 >>()
             {
                 if let Some((_id, feature)) = feature_layer.features().iter().next() {
-                    // feature is the Contour<Coord<f64>> itself
                     return Some(feature.clone());
                 }
             }
@@ -92,19 +89,7 @@ impl eframe::App for EguiMapApp {
                 .show_ui(ui);
 
             egui::Window::new("Galileo map").show(ctx, |ui| {
-                ui.label("Map center position:");
-                ui.label(format!(
-                    "Lat: {:.4} Lon: {:.4}",
-                    self.position.lat(), // GeoPoint trait needed for lat/lon
-                    self.position.lon()
-                ));
-
-                ui.separator();
-                ui.label("Map resolution:");
-                ui.label(format!("{:6}", self.resolution));
-
                 // Display algorithm outputs
-                ui.separator();
                 ui.label("Algorithm Outputs:");
                 for (i, algorithm) in self.algorithms.iter().enumerate() {
                     // Get a reference to the Option<AlgorithmOutput> directly
