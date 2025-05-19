@@ -5,19 +5,16 @@ use std::sync::{Arc, RwLock};
 
 use galileo::control::{EventPropagation, UserEvent, UserEventHandler};
 use galileo::layer::raster_tile_layer::RasterTileLayerBuilder;
-use galileo::layer::{FeatureId, FeatureLayer, Layer, feature_layer::Feature};
+use galileo::layer::{FeatureId, FeatureLayer, Layer};
 use galileo::symbol::{CirclePointSymbol, SimpleContourSymbol};
 use galileo::{Color, Map, MapBuilder};
 use galileo_egui::InitBuilder; // EguiMapState and EguiMap are used in app_ui.rs
 use galileo_types::Disambiguate;
 use galileo_types::cartesian::Point2;
-use galileo_types::contour::Contour as ContourTrait;
 use galileo_types::geo::impls::GeoPoint2d;
 use galileo_types::geo::{Crs, GeoPoint, NewGeoPoint};
 use galileo_types::geometry_type::{CartesianSpace2d, GeoSpace2d};
 use galileo_types::impls::Contour;
-use geo::Distance;
-use geo::{Haversine, LineString}; // Assuming Haversine struct is used for distance
 
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;

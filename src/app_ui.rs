@@ -1,8 +1,6 @@
-use galileo::layer::feature_layer::Feature;
 use galileo_egui::{EguiMap, EguiMapState};
 use galileo_types::geo::GeoPoint;
 use galileo_types::geo::impls::GeoPoint2d;
-use std::sync::{Arc, RwLock}; // May not be needed here directly
 
 // Assuming EguiMapApp might need access to these if they are part of its state or methods
 // For now, only direct dependencies for the struct and its impls are included.
