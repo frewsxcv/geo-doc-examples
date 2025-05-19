@@ -1,0 +1,9 @@
+{
+  "name": "geo-doc-examples",
+  "version": "0.1.0",
+  "files": [
+    "geo_doc_examples_bg.wasm",
+    "geo_doc_examples.js"
+  ],
+  "browser": "geo_doc_examples.js"
+}
