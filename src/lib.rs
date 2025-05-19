@@ -95,8 +95,18 @@ pub fn run() {
     })
     .collect();
 
+    // Holds the Cartesian coordinates (Point2) of the two draggable points.
+    // This data is kept in sync with the map layer's points and is also used as the source
+    // to update the endpoints of the line feature connecting these points.
     let shared_points_data = Arc::new(RwLock::new(initial_points_data.clone()));
+
+    // Maps the FeatureId of a draggable point to its original index (0 or 1) in the initial_points_data
+    // and subsequently in shared_points_data. This is used to update the correct point in shared_points_data.
     let feature_id_to_index_map = Arc::new(RwLock::new(HashMap::<FeatureId, usize>::new()));
+
+    // Stores the FeatureId of the line feature (from vector_layer2).
+    // This ID is used in `handle_drag` to specifically target the line feature for geometry updates
+    // when one of the draggable points (its endpoints) moves.
     let line_feature_id_arc = Arc::new(RwLock::new(None::<FeatureId>));
 
     let map_instance = create_map(initial_points_data, line_feature_id_arc.clone());
@@ -149,16 +159,24 @@ pub fn run() {
             UserEvent::DragStarted(mouse_button, event) => {
                 handle_drag_started(mouse_button, event, map, &selected_feature_id_handler)
             }
-            UserEvent::Drag(mouse_button, delta, event) => handle_drag(
-                mouse_button,
-                delta,
-                event,
-                &selected_feature_id_handler,
-                map,
-                &captured_shared_points,
-                &captured_id_map,
-                &captured_line_id, // Pass to handle_drag
-            ),
+            UserEvent::Drag(mouse_button, delta, event) => {
+                match handle_drag(
+                    mouse_button,
+                    delta,
+                    event,
+                    &selected_feature_id_handler,
+                    map,
+                    &captured_shared_points,
+                    &captured_id_map,
+                    &captured_line_id,
+                ) {
+                    Ok(propagation) => propagation,
+                    Err(e) => {
+                        eprintln!("An error occurred during drag: {:?}", e);
+                        EventPropagation::Stop // Default to Stop on error, or choose another suitable propagation.
+                    }
+                }
+            }
             _ => EventPropagation::Propagate,
         }
     });
@@ -178,6 +196,22 @@ pub fn run() {
     builder.init().expect("failed to initialize");
 }
 
+#[derive(Debug)]
+pub enum DragError {
+    ScreenToMapConversionFailed,
+    SelectedFeatureIdMissing,
+    // Point update related errors
+    PointFeatureNotFoundInLayer(FeatureId),
+    FailedToUpdateSharedPointIndex(FeatureId, usize), // feature_id, index
+    FailedToFindSharedPointId(FeatureId),
+    // Line update related errors
+    LineIdUnavailable,
+    InsufficientSharedPointsForLine,
+    ProjectionUnavailable,
+    UnprojectionFailed,
+    LineFeatureNotFoundInLayer(FeatureId),
+}
+
 fn handle_drag(
     _mouse_button: &galileo::control::MouseButton,
     _delta: &galileo_types::cartesian::Vector2<f64>,
@@ -187,14 +221,13 @@ fn handle_drag(
     shared_points: &Arc<RwLock<Vec<Point2>>>,
     id_to_index_map: &Arc<RwLock<HashMap<FeatureId, usize>>>,
     line_id_arc: &Arc<RwLock<Option<FeatureId>>>,
-) -> EventPropagation {
+) -> Result<EventPropagation, DragError> {
     let opt_feature_id_to_drag = *feature_id_arc.read().unwrap();
     if let Some(feature_id_to_drag) = opt_feature_id_to_drag {
-        let Some(new_feature_position) = map.view().screen_to_map(event.screen_pointer_position)
-        else {
-            eprintln!("Failed to convert screen position to map coordinates");
-            return EventPropagation::Stop;
-        };
+        let new_feature_position = map
+            .view()
+            .screen_to_map(event.screen_pointer_position)
+            .ok_or(DragError::ScreenToMapConversionFailed)?;
 
         let mut needs_redraw = false;
         let mut point_updated_in_layer = false;
@@ -227,111 +260,95 @@ fn handle_drag(
                                 index, feature_id_to_drag, new_feature_position
                             );
                         } else {
-                            eprintln!(
-                                "Error: Mapped index {} out of bounds for shared_points (len {})",
-                                index,
-                                shared_points_writer.len()
-                            );
+                            return Err(DragError::FailedToUpdateSharedPointIndex(
+                                feature_id_to_drag,
+                                *index,
+                            ));
                         }
                     } else {
-                        eprintln!(
-                            "Error: FeatureId {:?} not found in id_to_index_map.",
-                            feature_id_to_drag
-                        );
+                        return Err(DragError::FailedToFindSharedPointId(feature_id_to_drag));
                     }
 
                     needs_redraw = true;
+                    break;
                 }
             }
         }
 
+        if !point_updated_in_layer {
+            return Err(DragError::PointFeatureNotFoundInLayer(feature_id_to_drag));
+        }
+
         if needs_redraw {
-            // Update the line layer (vector_layer2) based on the new positions of draggable points
             let opt_line_id_to_update = *line_id_arc.read().unwrap();
-            if let Some(line_id_to_update) = opt_line_id_to_update {
-                let current_cartesian_points = shared_points.read().unwrap();
-                if current_cartesian_points.len() >= 2 {
-                    let p1_cartesian = current_cartesian_points[0];
-                    let p2_cartesian = current_cartesian_points[1];
+            let line_id_to_update = opt_line_id_to_update.ok_or(DragError::LineIdUnavailable)?;
 
-                    // Get the projector for unprojection
-                    // Note: This assumes Crs::EPSG3857 is the CRS of the cartesian points
-                    if let Some(projector) = Crs::EPSG3857.get_projection::<GeoPoint2d, Point2>() {
-                        if let (Some(p1_geo_proj), Some(p2_geo_proj)) = (
-                            projector.unproject(&p1_cartesian),
-                            projector.unproject(&p2_cartesian),
-                        ) {
-                            let p1_geo_coord =
-                                geo::coord!(x: p1_geo_proj.lon(), y: p1_geo_proj.lat());
-                            let p2_geo_coord =
-                                geo::coord!(x: p2_geo_proj.lon(), y: p2_geo_proj.lat());
+            let current_cartesian_points = shared_points.read().unwrap();
+            if current_cartesian_points.len() < 2 {
+                return Err(DragError::InsufficientSharedPointsForLine);
+            }
+            let p1_cartesian = current_cartesian_points[0];
+            let p2_cartesian = current_cartesian_points[1];
 
-                            let new_line_contour_data =
-                                Contour::new(vec![p1_geo_coord, p2_geo_coord], false);
+            let p1_geo_proj = unproject_cartesian_point_to_geo(&p1_cartesian)?;
+            let p2_geo_proj = unproject_cartesian_point_to_geo(&p2_cartesian)?;
 
-                            let mut line_layer_updated = false;
-                            for layer_trait_object_mut in map.layers_mut().iter_mut() {
-                                if let Some(line_feature_layer) = layer_trait_object_mut
-                                    .as_any_mut()
-                                    .downcast_mut::<FeatureLayer<
-                                        geo::Coord<f64>,
-                                        Contour<geo::Coord<f64>>,
-                                        SimpleContourSymbol,
-                                        GeoSpace2d,
-                                    >>()
-                                {
-                                    if let Some(line_to_update) =
-                                        line_feature_layer.features_mut().get_mut(line_id_to_update)
-                                    {
-                                        *line_to_update = new_line_contour_data.clone();
-                                        line_feature_layer.update_feature(line_id_to_update);
-                                        println!(
-                                            "Updated line feature {:?} in vector_layer2",
-                                            line_id_to_update
-                                        );
-                                        line_layer_updated = true;
-                                        break;
-                                    }
-                                }
-                            }
+            let p1_geo_coord = geo::coord!(x: p1_geo_proj.lon(), y: p1_geo_proj.lat());
+            let p2_geo_coord = geo::coord!(x: p2_geo_proj.lon(), y: p2_geo_proj.lat());
 
-                            if !line_layer_updated {
-                                eprintln!(
-                                    "Failed to find and update line feature {:?} in vector_layer2",
-                                    line_id_to_update
-                                );
-                            }
-                        } else {
-                            eprintln!("Failed to unproject one or both points for the line.");
-                        }
-                    } else {
-                        eprintln!("Failed to get projector for EPSG:3857.");
+            let new_line_contour_data = Contour::new(vec![p1_geo_coord, p2_geo_coord], false);
+
+            let mut line_layer_updated_successfully = false;
+            for layer_trait_object_mut in map.layers_mut().iter_mut() {
+                if let Some(line_feature_layer) = layer_trait_object_mut
+                    .as_any_mut()
+                    .downcast_mut::<FeatureLayer<
+                        geo::Coord<f64>,
+                        Contour<geo::Coord<f64>>,
+                        SimpleContourSymbol,
+                        GeoSpace2d,
+                    >>()
+                {
+                    if let Some(line_to_update) =
+                        line_feature_layer.features_mut().get_mut(line_id_to_update)
+                    {
+                        *line_to_update = new_line_contour_data.clone();
+                        line_feature_layer.update_feature(line_id_to_update);
+                        println!(
+                            "Updated line feature {:?} in vector_layer2",
+                            line_id_to_update
+                        );
+                        line_layer_updated_successfully = true;
+                        break;
                     }
-                } else {
-                    eprintln!(
-                        "shared_points_data does not contain enough points to form a line for vector_layer2."
-                    );
                 }
-            } else {
-                eprintln!("Line feature ID not available in line_id_arc to update vector_layer2.");
             }
 
-            // Calculate and print Haversine distance of the (potentially updated) line
+            if !line_layer_updated_successfully {
+                return Err(DragError::LineFeatureNotFoundInLayer(line_id_to_update));
+            }
+
             if let Some(contour_geom) = get_first_line_contour_geometry(map) {
                 print_contour_haversine_distance(contour_geom);
             }
 
             map.redraw();
-            return EventPropagation::Consume;
+            Ok(EventPropagation::Consume)
+        } else {
+            Ok(EventPropagation::Stop)
         }
-
-        if !point_updated_in_layer {
-            return EventPropagation::Stop;
-        }
-        return EventPropagation::Stop;
     } else {
-        EventPropagation::Propagate
+        Ok(EventPropagation::Propagate)
     }
+}
+
+fn unproject_cartesian_point_to_geo(cartesian_point: &Point2) -> Result<GeoPoint2d, DragError> {
+    let projector = Crs::EPSG3857
+        .get_projection::<GeoPoint2d, Point2>()
+        .ok_or(DragError::ProjectionUnavailable)?;
+    projector
+        .unproject(cartesian_point)
+        .ok_or(DragError::UnprojectionFailed)
 }
 
 fn handle_drag_started(
