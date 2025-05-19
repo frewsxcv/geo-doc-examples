@@ -17,6 +17,7 @@ use galileo_types::geo::{Crs, GeoPoint, NewGeoPoint};
 use galileo_types::geometry_type::{CartesianSpace2d, GeoSpace2d};
 use galileo_types::impls::Contour;
 use geo::Distance;
+use geo::{Haversine, LineString}; // Assuming Haversine struct is used for distance
 
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
@@ -24,30 +25,100 @@ use wasm_bindgen::prelude::*;
 pub mod app_ui; // Declare the new module
 use app_ui::EguiMapApp; // Import the struct
 
+// Configuration Structs
+#[derive(Debug, Clone, Copy)]
+pub struct PointConfig {
+    pub lon: f64,
+    pub lat: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LineConfig {
+    pub start: PointConfig,
+    pub end: PointConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct MapViewConfig {
+    pub center_lon: f64,
+    pub center_lat: f64,
+    pub zoom: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct MapGeometryConfig {
+    pub draggable_points: Vec<PointConfig>,
+    pub line: LineConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppConfig {
+    pub map_view: MapViewConfig,
+    pub geometries: MapGeometryConfig,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig {
+            map_view: MapViewConfig {
+                center_lon: 128.9784,
+                center_lat: 37.566,
+                zoom: 8,
+            },
+            geometries: MapGeometryConfig {
+                draggable_points: vec![
+                    PointConfig {
+                        lon: 127.9784,
+                        lat: 37.566,
+                    },
+                    PointConfig {
+                        lon: 128.9784,
+                        lat: 37.566,
+                    },
+                ],
+                line: LineConfig {
+                    start: PointConfig {
+                        lon: 127.9784,
+                        lat: 37.566,
+                    },
+                    end: PointConfig {
+                        lon: 128.9784,
+                        lat: 37.566,
+                    },
+                },
+            },
+        }
+    }
+}
+
 #[cfg(target_family = "wasm")]
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn main() {
     console_error_panic_hook::set_once();
-    run();
+    run(AppConfig::default()); // Pass default config to run
 }
 
-pub fn run() {
+pub fn run(config: AppConfig) {
     let projection_for_initial_points = Crs::EPSG3857
         .get_projection::<GeoPoint2d, Point2>()
         .expect("must find projection for initial points");
 
-    let initial_points_data: Vec<Point2> = vec![
-        geo::point!(x: 127.9784, y: 37.566).to_geo2d(),
-        geo::point!(x: 128.9784, y: 37.566).to_geo2d(),
-    ]
-    .into_iter()
-    .map(|p_geo| {
-        let galileo_geo_point = GeoPoint2d::lonlat(p_geo.lon(), p_geo.lat());
-        projection_for_initial_points
-            .project(&galileo_geo_point)
-            .expect("Initial point projection failed")
-    })
-    .collect();
+    // Create initial_points_data from AppConfig
+    let initial_points_data: Vec<Point2> = config
+        .geometries
+        .draggable_points
+        .iter()
+        .map(|p_config| {
+            // Convert PointConfig to geo::Point for Disambiguate trait
+            let geo_type_point = geo::Point::new(p_config.lon, p_config.lat);
+            // Disambiguate and then convert to galileo_types::geo::Point for projection
+            let p_geo_disambig = geo_type_point.to_geo2d(); // p_geo is Disambig<geo::Point<f64>, GeoSpace2d>
+            let galileo_geo_point = GeoPoint2d::lonlat(p_geo_disambig.lon(), p_geo_disambig.lat());
+            projection_for_initial_points
+                .project(&galileo_geo_point)
+                .expect("Initial point projection failed")
+        })
+        .collect();
 
     // Holds the Cartesian coordinates (Point2) of the two draggable points.
     // This data is kept in sync with the map layer's points and is also used as the source
@@ -65,7 +136,13 @@ pub fn run() {
 
     let shared_haversine_distance = Arc::new(RwLock::new(None::<f64>));
 
-    let map_instance = create_map(initial_points_data, line_feature_id_arc.clone());
+    // Pass geometry and view configs to create_map
+    let map_instance = create_map(
+        initial_points_data, // This is already projected Vec<Point2>
+        &config.geometries,  // Pass reference to geometry config
+        &config.map_view,    // Pass reference to view config
+        line_feature_id_arc.clone(),
+    );
 
     // Populate the feature_id_to_index_map
     {
@@ -401,6 +478,8 @@ fn get_default_line_contour_style() -> SimpleContourSymbol {
 
 fn create_map(
     initial_points: Vec<Point2>,
+    geometries: &MapGeometryConfig,
+    map_view: &MapViewConfig,
     line_feature_id_arc: Arc<RwLock<Option<FeatureId>>>,
 ) -> Map {
     let layer = RasterTileLayerBuilder::new_osm()
@@ -416,8 +495,8 @@ fn create_map(
 
     let line_data = vec![Contour::new(
         vec![
-            geo::coord!(x: 127.9784, y: 37.566),
-            geo::coord!(x: 128.9784, y: 37.566),
+            geo::coord!(x: geometries.line.start.lon, y: geometries.line.start.lat),
+            geo::coord!(x: geometries.line.end.lon, y: geometries.line.end.lat),
         ],
         false,
     )];
@@ -436,8 +515,8 @@ fn create_map(
     }
 
     MapBuilder::default()
-        .with_latlon(37.566, 128.9784)
-        .with_z_level(8)
+        .with_latlon(map_view.center_lat, map_view.center_lon)
+        .with_z_level(map_view.zoom)
         .with_layer(layer)
         .with_layer(vector_layer2)
         .with_layer(vector_layer)
