@@ -6,16 +6,20 @@ use galileo_types::geo::impls::GeoPoint2d;
 // For now, only direct dependencies for the struct and its impls are included.
 
 // Import Algorithm and AlgorithmOutput
-use crate::algorithms::{Algorithm, AlgorithmOutput, HaversineDistance};
+use crate::algorithms::{Algorithm, HaversineDistance};
 use galileo_types::impls::Contour; // For Contour type
 use geo::Coord; // For Coord type
+use std::fmt::Display; // Needed for Box<dyn Display ...>
+
+// Type alias for the stored, type-erased output of algorithms.
+pub type StoredAlgorithmOutput = Box<dyn Display + Send + Sync>;
 
 pub struct EguiMapApp {
     pub map: EguiMapState,
     pub position: GeoPoint2d,
     pub resolution: f64,
     algorithms: Vec<Box<dyn Algorithm>>,
-    algorithm_outputs: Vec<Option<AlgorithmOutput>>,
+    algorithm_outputs: Vec<Option<StoredAlgorithmOutput>>,
 }
 
 impl EguiMapApp {
@@ -29,7 +33,8 @@ impl EguiMapApp {
 
         // Initialize algorithms
         let algorithms: Vec<Box<dyn Algorithm>> = vec![Box::new(HaversineDistance)];
-        let mut algorithm_outputs = Vec::with_capacity(algorithms.len());
+        let mut algorithm_outputs: Vec<Option<StoredAlgorithmOutput>> =
+            Vec::with_capacity(algorithms.len());
         for _ in 0..algorithms.len() {
             algorithm_outputs.push(None);
         }
@@ -67,16 +72,13 @@ impl EguiMapApp {
 
 impl eframe::App for EguiMapApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Attempt to get the current line geometry
-        let line_geometry = self.get_line_geometry();
+        let line_contour = self.get_line_geometry();
 
-        // Run algorithms if geometry is available
-        if let Some(ref geom) = line_geometry {
+        if let Some(ref geom_contour) = line_contour {
             for (i, algorithm) in self.algorithms.iter().enumerate() {
-                self.algorithm_outputs[i] = algorithm.run(geom);
+                self.algorithm_outputs[i] = algorithm.calculate_and_box_output(geom_contour);
             }
         } else {
-            // If no geometry, clear previous outputs or set to None
             for output in self.algorithm_outputs.iter_mut() {
                 *output = None;
             }
@@ -92,7 +94,6 @@ impl eframe::App for EguiMapApp {
                 // Display algorithm outputs
                 ui.label("Algorithm Outputs:");
                 for (i, algorithm) in self.algorithms.iter().enumerate() {
-                    // Get a reference to the Option<AlgorithmOutput> directly
                     let output_opt_ref = &self.algorithm_outputs[i];
                     algorithm.display_ui(ui, output_opt_ref);
                 }

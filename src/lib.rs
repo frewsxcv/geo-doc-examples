@@ -285,10 +285,6 @@ fn handle_drag(
                         let mut shared_points_writer = shared_points.write().unwrap();
                         if *index < shared_points_writer.len() {
                             shared_points_writer[*index] = new_feature_position;
-                            println!(
-                                "Updated shared_points[{}] (mapped from FeatureId {:?}) to: {:?}",
-                                index, feature_id_to_drag, new_feature_position
-                            );
                         } else {
                             return Err(DragError::FailedToUpdateSharedPointIndex(
                                 feature_id_to_drag,
@@ -344,10 +340,6 @@ fn handle_drag(
                     {
                         *line_to_update = new_line_contour_data.clone();
                         line_feature_layer.update_feature(line_id_to_update);
-                        println!(
-                            "Updated line feature {:?} in vector_layer2",
-                            line_id_to_update
-                        );
                         line_layer_updated_successfully = true;
                         break;
                     }
@@ -383,8 +375,6 @@ fn handle_drag_started(
     map: &mut galileo::Map,
     feature_id_arc: &Arc<RwLock<Option<FeatureId>>>,
 ) -> EventPropagation {
-    println!("DragStarted: {:?} {:?}", mouse_button, event);
-
     let Some(position) = map.view().screen_to_map(event.screen_pointer_position) else {
         eprintln!(
             "Failed to convert screen position to map Cartesian coordinates for drag_started"
