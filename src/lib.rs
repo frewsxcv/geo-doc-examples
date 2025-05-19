@@ -16,7 +16,7 @@ use galileo_types::geo::impls::GeoPoint2d;
 use galileo_types::geo::{Crs, GeoPoint, NewGeoPoint};
 use galileo_types::geometry_type::{CartesianSpace2d, GeoSpace2d};
 use galileo_types::impls::Contour;
-use geo::{Distance, Haversine, HaversineDistance, LineString};
+use geo::Distance;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
@@ -436,6 +436,20 @@ fn layer_as_point_feature_layer(
         .downcast_ref::<FeatureLayer<Point2, Point2, CirclePointSymbol, CartesianSpace2d>>()
 }
 
+fn get_default_circle_point_style() -> CirclePointSymbol {
+    CirclePointSymbol {
+        color: Color::GREEN,
+        size: 10.0,
+    }
+}
+
+fn get_default_line_contour_style() -> SimpleContourSymbol {
+    SimpleContourSymbol {
+        color: Color::BLUE,
+        width: 3.0,
+    }
+}
+
 fn create_map(
     initial_points: Vec<Point2>,
     line_feature_id_arc: Arc<RwLock<Option<FeatureId>>>,
@@ -447,10 +461,7 @@ fn create_map(
 
     let vector_layer: FeatureLayer<Point2, Point2, _, CartesianSpace2d> = FeatureLayer::new(
         initial_points,
-        CirclePointSymbol {
-            color: Color::GREEN,
-            size: 10.0,
-        },
+        get_default_circle_point_style(),
         Crs::EPSG3857,
     );
 
@@ -463,14 +474,7 @@ fn create_map(
     )];
 
     let vector_layer2: FeatureLayer<geo::Coord<f64>, Contour<geo::Coord<f64>>, _, GeoSpace2d> =
-        FeatureLayer::new(
-            line_data,
-            SimpleContourSymbol {
-                color: Color::BLUE,
-                width: 3.0,
-            },
-            Crs::WGS84,
-        );
+        FeatureLayer::new(line_data, get_default_line_contour_style(), Crs::WGS84);
 
     {
         let mut line_id_writer = line_feature_id_arc.write().unwrap();
