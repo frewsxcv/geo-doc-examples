@@ -5,21 +5,18 @@ use std::sync::{Arc, RwLock};
 
 use galileo::control::{EventPropagation, UserEvent, UserEventHandler};
 use galileo::layer::raster_tile_layer::RasterTileLayerBuilder;
-use galileo::layer::{
-    FeatureId, FeatureLayer, Layer,
-    feature_layer::{self, Feature},
-};
+use galileo::layer::{FeatureId, FeatureLayer, Layer, feature_layer::Feature};
 use galileo::symbol::{CirclePointSymbol, SimpleContourSymbol};
 use galileo::{Color, Map, MapBuilder};
 use galileo_egui::{EguiMap, EguiMapState};
+use galileo_types::Disambiguate;
 use galileo_types::cartesian::Point2;
 use galileo_types::contour::Contour as ContourTrait;
 use galileo_types::geo::impls::GeoPoint2d;
 use galileo_types::geo::{Crs, GeoPoint, NewGeoPoint};
 use galileo_types::geometry_type::{CartesianSpace2d, GeoSpace2d};
 use galileo_types::impls::Contour;
-use galileo_types::{Disambig, Disambiguate};
-use geo::{HaversineDistance, LineString};
+use geo::Distance;
 #[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
@@ -180,7 +177,9 @@ pub fn run() {
             _ => EventPropagation::Propagate,
         }
     });
-    let mut builder = galileo_egui::InitBuilder::new(map_instance)
+    let mut builder = galileo_egui::InitBuilder::new(map_instance);
+
+    builder = builder
         .with_app_builder(|egui_map_state| Box::new(EguiMapApp::new(egui_map_state)))
         .with_handlers(vec![handler]);
 
@@ -474,7 +473,7 @@ fn print_contour_haversine_distance(
     if points_vec.len() >= 2 {
         let p1 = points_vec[0];
         let p2 = points_vec[1];
-        let distance = geo::Point(p1).haversine_distance(&geo::Point(p2));
+        let distance = geo::Haversine.distance(geo::Point(p1), geo::Point(p2));
         println!(
             "Haversine distance of the static line: {:.2} meters",
             distance
